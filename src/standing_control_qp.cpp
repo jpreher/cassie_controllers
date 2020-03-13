@@ -79,6 +79,7 @@ void StandingControlQP::Cache::init() {
 }
 
 void StandingControlQP::Cache::reset() {
+    // Outputs
     this->ya.setZero();
     this->dya.setZero();
     this->Dya.setZero();
@@ -176,6 +177,8 @@ void StandingControlQP::Config::init() {
     this->Kd.resize(10);
     this->Kpy.resize(6);
     this->Kdy.resize(6);
+    this->Pdiag.resize(12);
+    this->Poffdiag.resize(6);
 }
 
 void StandingControlQP::Config::reconfigure() {
@@ -217,32 +220,23 @@ void StandingControlQP::Config::reconfigure() {
     this->G.bottomRows(ny) = MatrixXd::Identity(ny,ny);
 
     // Exponential CLF and CARE solution
-    double offDiag = 3.1623*25;
-    double upper_mainDiag = 8.5584*100;
-    double lower_mainDiag = 2.7064;
-    this->P.resize(2*ny,2*ny);
-    this->P<< upper_mainDiag,0,0,0,0,0,    offDiag,0,0,0,0,0,
-          0,    upper_mainDiag,0,0,0,0,0,    offDiag,0,0,0,0,
-          0,0,    upper_mainDiag,0,0,0,0,0,    offDiag,0,0,0,
-          0,0,0,    upper_mainDiag,0,0,0,0,0,    offDiag,0,0,
-          0,0,0,0,    upper_mainDiag,0,0,0,0,0,    offDiag,0,
-          0,0,0,0,0,    upper_mainDiag,0,0,0,0,0,    offDiag,
-              offDiag,0,0,0,0,0,    lower_mainDiag,0,0,0,0,0,
-          0,    offDiag,0,0,0,0,0,    lower_mainDiag,0,0,0,0,
-          0,0,    offDiag,0,0,0,0,0,    lower_mainDiag,0,0,0,
-          0,0,0,    offDiag,0,0,0,0,0,    lower_mainDiag,0,0,
-          0,0,0,0,    offDiag,0,0,0,0,0,    lower_mainDiag,0,
-          0,0,0,0,0,    offDiag,0,0,0,0,0,    lower_mainDiag;
+    this->paramChecker.checkAndUpdateYaml("qp/Pdiag", this->Pdiag);
+    this->paramChecker.checkAndUpdateYaml("qp/Poffdiag", this->Poffdiag);
+    this->P.resize(2*ny,2*ny); this->P.setZero();
+    this->P.diagonal() << this->Pdiag;
+    this->P.topRightCorner(6,6).diagonal() << this->Poffdiag;
+    this->P.bottomLeftCorner(6,6).diagonal() << this->Poffdiag;
+
     MatrixXd Iep(2*ny,2*ny);
     Iep.setZero();
     Iep.topLeftCorner(ny,ny) << MatrixXd::Identity(ny,ny) * (1.0/this->ep);
     Iep.bottomRightCorner(ny,ny) << MatrixXd::Identity(ny,ny);
     this->P = Iep.transpose() * this->P * Iep;
 
-    // Derivative of output dynamics
+    // Derivative of linear output dynamics
     this->LFV_mat = this->F.transpose() * this->P + this->P * this->F;
 
-    // Robot torque
+    // Robot torque mapping with gear reduction
     this->Be.resize(22,10);
     this->Be.setZero();
     this->Be(LeftHipRoll,    0) = 25.;
@@ -276,28 +270,34 @@ void StandingControlQP::Config::reconfigure() {
             4.5, 4.5, 12.2, 12.2, 0.9;
 
     // Get all QP tunable parameters
-    this->paramChecker.checkAndUpdate("qp/clf_override_task_pd", this->clf_override_task_pd);
-    this->paramChecker.checkAndUpdate("qp/nQPIter",       this->nQPIter);
-    this->paramChecker.checkAndUpdate("qp/reg_ddq",       this->reg_ddq);
-    this->paramChecker.checkAndUpdate("qp/reg_u",         this->reg_u);
-    this->paramChecker.checkAndUpdate("qp/reg_achilles",  this->reg_achilles);
-    this->paramChecker.checkAndUpdate("qp/reg_rigid",     this->reg_rigid);
-    this->paramChecker.checkAndUpdate("qp/reg_fx",        this->reg_fx);
-    this->paramChecker.checkAndUpdate("qp/reg_fy",        this->reg_fy);
-    this->paramChecker.checkAndUpdate("qp/reg_fz",        this->reg_fz);
-    this->paramChecker.checkAndUpdate("qp/reg_muy",       this->reg_muy);
-    this->paramChecker.checkAndUpdate("qp/reg_muz",       this->reg_muz);
-    this->paramChecker.checkAndUpdate("qp/reg_clf_delta", this->reg_clf_delta);
-    this->paramChecker.checkAndUpdate("qp/w_u_chatter",   this->w_u_chatter);
-    this->paramChecker.checkAndUpdate("qp/w_outputs",     this->w_outputs);
+    this->paramChecker.checkAndUpdate("qp/clf_use_task_pd",    this->clf_use_task_pd);
+    this->paramChecker.checkAndUpdate("qp/clf_use_inequality", this->clf_use_inequality);
+    this->paramChecker.checkAndUpdate("qp/clf_use_Vdot_cost",  this->clf_use_Vdot_cost);
+    this->paramChecker.checkAndUpdate("qp/nQPIter",            this->nQPIter);
+    this->paramChecker.checkAndUpdate("qp/reg_ddq",            this->reg_ddq);
+    this->paramChecker.checkAndUpdate("qp/reg_u",              this->reg_u);
+    this->paramChecker.checkAndUpdate("qp/reg_achilles",       this->reg_achilles);
+    this->paramChecker.checkAndUpdate("qp/reg_rigid",          this->reg_rigid);
+    this->paramChecker.checkAndUpdate("qp/reg_fx",             this->reg_fx);
+    this->paramChecker.checkAndUpdate("qp/reg_fy",             this->reg_fy);
+    this->paramChecker.checkAndUpdate("qp/reg_fz",             this->reg_fz);
+    this->paramChecker.checkAndUpdate("qp/reg_muy",            this->reg_muy);
+    this->paramChecker.checkAndUpdate("qp/reg_muz",            this->reg_muz);
+    this->paramChecker.checkAndUpdate("qp/reg_clf_delta",      this->reg_clf_delta);
+    this->paramChecker.checkAndUpdate("qp/w_u_chatter",        this->w_u_chatter);
+    this->paramChecker.checkAndUpdate("qp/w_outputs",          this->w_outputs);
+    this->paramChecker.checkAndUpdate("qp/w_Vdot",             this->w_Vdot);
 
-    this->paramChecker.checkAndUpdate("qp/w_hol_achilles",  this->w_hol_achilles);
-    this->paramChecker.checkAndUpdate("qp/w_hol_fixed", this->w_hol_fixed);
-    this->paramChecker.checkAndUpdate("qp/w_hol_fx",    this->w_hol_fx);
-    this->paramChecker.checkAndUpdate("qp/w_hol_fy",    this->w_hol_fy);
-    this->paramChecker.checkAndUpdate("qp/w_hol_fz",    this->w_hol_fz);
-    this->paramChecker.checkAndUpdate("qp/w_hol_my",    this->w_hol_my);
-    this->paramChecker.checkAndUpdate("qp/w_hol_mz",    this->w_hol_mz);
+    this->paramChecker.checkAndUpdate("qp/w_hol_achilles", this->w_hol_achilles);
+    this->paramChecker.checkAndUpdate("qp/w_hol_fixed",    this->w_hol_fixed);
+    this->paramChecker.checkAndUpdate("qp/w_hol_fx",       this->w_hol_fx);
+    this->paramChecker.checkAndUpdate("qp/w_hol_fy",       this->w_hol_fy);
+    this->paramChecker.checkAndUpdate("qp/w_hol_fz",       this->w_hol_fz);
+    this->paramChecker.checkAndUpdate("qp/w_hol_my",       this->w_hol_my);
+    this->paramChecker.checkAndUpdate("qp/w_hol_mz",       this->w_hol_mz);
+
+    this->paramChecker.checkAndUpdateYaml("qp/kp", this->Kpy);
+    this->paramChecker.checkAndUpdateYaml("qp/kd", this->Kdy);
 }
 
 bool StandingControlQP::reconfigure() {
@@ -306,16 +306,13 @@ bool StandingControlQP::reconfigure() {
     // Reconfigure high-level controller params
     this->config.reconfigure();
 
-    // Reconfigure the PD controller
+    // Reconfigure the IK PD controller
     VectorXd Kp(10), Kd(10);
     VectorXd Kph(5), Kdh(5); Kph.setZero(); Kdh.setZero();
     this->config.paramChecker.checkAndUpdateYaml("kp", Kph);
     this->config.paramChecker.checkAndUpdateYaml("kd", Kdh);
     Kp << Kph, Kph;
     Kd << Kdh, Kdh;
-
-    this->config.paramChecker.checkAndUpdateYaml("qp/kp", this->config.Kpy);
-    this->config.paramChecker.checkAndUpdateYaml("qp/kd", this->config.Kdy);
 
     // Pass in the new values
     this->pd.reconfigure(Kp, Kd);
@@ -350,14 +347,13 @@ StandingControlQP::StandingControlQP(ros::NodeHandle &nh, cassie_model::Cassie &
     // Create the QP solver
     int nvar = 49;
     int ncon = 41;
-    qpsolver = new SQProblem(nvar, ncon, HST_POSDEF); // (num vars, num constr)
+    qpsolver = new SQProblem(nvar, ncon, HST_POSDEF); // (num vars, num constr), Hessian is pos def by formulation
 
     // Set QP Options
     Options options;
     options.setToMPC(); // Fastest stable preset for qpoases
     options.enableRegularisation = BT_FALSE; // We do our own hand-tuned regulatisation
-    //options.setToDefault();
-    options.printLevel = PL_LOW; // Change for: PL_MEDIUM, PL_HIGH;
+    options.printLevel = PL_LOW; // Change for additional readouts: PL_MEDIUM, PL_HIGH
     qpsolver->setOptions( options );
 
     // Parameter checker
@@ -392,7 +388,7 @@ void StandingControlQP::update(VectorXd &radio, VectorXd &u) {
     if ( (this->robot->leftContact >= 0.99) && (this->robot->rightContact >= 0.99) )
         this->memory.contact_initialized = true;
 
-    // Current joint configurations
+    // Current joint configurations. Store to IK sol in case it does not converge.
     VectorXd q_motors(10), dq_motors(10);
     for (int i = 0; i < this->robot->iRotorMap.size(); ++i) {
         int ind = this->robot->iRotorMap(i);
@@ -401,11 +397,11 @@ void StandingControlQP::update(VectorXd &radio, VectorXd &u) {
         this->cache.IK_solution(i) = q_motors(i);
     }
 
-    // Get current foot positions (using leg deflections!)
+    // Get current foot positions (using deflected legs!)
     SymFunction::p_leftSole_constraint(this->cache.pLF_actual, this->robot->q);
     SymFunction::p_rightSole_constraint(this->cache.pRF_actual, this->robot->q);
 
-    // If initializing, start the timer and set feet
+    // If initializing, set foot configurations
     if (this->memory.mode == -1) {
         this->setFootTransforms();
         this->memory.mode = 0;
@@ -427,7 +423,8 @@ void StandingControlQP::update(VectorXd &radio, VectorXd &u) {
         u = this->getTorqueID();
     }
 
-    // Check if we are at the end of the transition phase
+    // Check if we are at the end of the transition phase...
+    // This is implemented for transitioning to our walking controller. Not currently released.
     if (this->memory.queueTransition) {
         if ( (this->heightFilter.getValue() < 0.99 * this->config.height_lb) ) {
             this->memory.readyToTransition = true;
@@ -451,8 +448,11 @@ void StandingControlQP::computeDesired(VectorXd &radio) {
     for (int i=0; i<6; i++)
         this->cache.d2yd[i] = control_utilities::clamp(this->cache.d2yd[i], -0.75, 0.75);
     this->memory.dyd_last = this->cache.dyd;
-    this->cache.d2yd.setZero(); // Hack... lowpass with timing jitter too discontinuous out of Gazebo
+    // Hack... lowpass with timing jitter too discontinuous out of Gazebo
+    // TODO: come up with better joystick smoothing so we can use the acceleration feedforward term
+    this->cache.d2yd.setZero();
 
+    ////////////////////// FOR TESTING \\\\\\\\\\\\\\\\\\\\\\\\
     // Override the crouch with a dynamic and continuous crouch
     bool triggerCrouch = (-radio(SH) > 0.) && (this->heightFilter.getValue() < 0.99 * this->config.height_lb);
 
@@ -491,10 +491,11 @@ void StandingControlQP::computeDesired(VectorXd &radio) {
 }
 
 VectorXd StandingControlQP::getTorqueQP() {
+    // Zero torque
     VectorXd u = VectorXd::Zero(10);
 
     // Formulate the QP
-    // States are X = [ddq; u; F]
+    // States are X = [ddq; u; F; delta] \in \mathbb{R}^{49}
     // Compute the robot constraints
     this->robot->kinematics.update(this->robot->model, this->robot->q, this->robot->dq);
     this->cache.Jc << this->robot->kinematics.cache.J_achilles,
@@ -508,7 +509,7 @@ VectorXd StandingControlQP::getTorqueQP() {
     this->cache.A_holonomics.block(0,0, 16,22) << this->cache.Jc;
     this->cache.b_holonomics << - this->cache.dJc * this->robot->dq;
 
-    // Compute the robot dynamics
+    // Compute the robot dynamics via RBDL
     this->robot->dynamics.calcHandC(this->robot->model, this->robot->q, this->robot->dq);
     this->cache.Aeq_dynamics.block(0,0,  22,22) << this->robot->dynamics.H;
     this->cache.Aeq_dynamics.block(0,22, 22,10) << -this->config.Be;
@@ -528,7 +529,7 @@ VectorXd StandingControlQP::getTorqueQP() {
     // Task space terms
     this->cache.A_y.block(0,0,6,22) << this->cache.Dya.block(0,0,6,22);
     this->cache.b_y << this->cache.d2yd - this->cache.DLfya.block(0,0,6,22)*this->robot->dq;
-    if (!config.clf_override_task_pd) {
+    if (config.clf_use_task_pd) {
         this->cache.b_y -= (this->config.Kpy.cwiseProduct(this->cache.eta.segment(0,6)) + this->config.Kdy.cwiseProduct(this->cache.eta.segment(6,6)));
     }
 
@@ -556,7 +557,7 @@ VectorXd StandingControlQP::getTorqueQP() {
     this->cache.A_clf(0,48) = -1.;
     double b_lb_clf = -1e12;
     double b_ub_clf =  1e12;
-    if (this->config.clf_override_task_pd)
+    if (this->config.clf_use_inequality)
         b_ub_clf = - this->config.gam * this->cache.V - LFV - LGVpsi1;
 
     // Build all constraint matrices
@@ -648,6 +649,9 @@ VectorXd StandingControlQP::getTorqueQP() {
     G.diagonal() += w_reg;
     g << -A.transpose() * b;
     g.segment(0,22) -= ddq_tar * w_reg.segment(0,22);
+
+    if (this->config.clf_use_Vdot_cost)
+        g.segment(0,22) += this->config.w_Vdot * (LGV * this->cache.Dya.block(0,0,6,22)).transpose();
 
     // Flatten matrices in row-major format.
     Map<VectorXd> Gflat(G.data(), G.size());

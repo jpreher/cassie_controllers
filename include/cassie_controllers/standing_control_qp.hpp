@@ -133,7 +133,9 @@ private:
     */
     struct Config {
         bool use_qp;
-        bool clf_override_task_pd;
+        bool clf_use_Vdot_cost;
+        bool clf_use_inequality;
+        bool clf_use_task_pd;
         double control_rate;
         double height_lowpass_dt_cutoff;
         double lateral_lowpass_dt_cutoff;
@@ -171,6 +173,8 @@ private:
         MatrixXd contact_pyramid;
 
         // QP Tuning
+        VectorXd Pdiag;
+        VectorXd Poffdiag;
         double reg_ddq;
         double reg_u;
         double reg_achilles;
@@ -193,6 +197,7 @@ private:
         double w_hol_fz;
         double w_hol_my;
         double w_hol_mz;
+        double w_Vdot;
 
         // Parameter checker
         ros_utilities::ParamChecker paramChecker;

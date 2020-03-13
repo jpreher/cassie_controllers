@@ -98,17 +98,14 @@ int main(int argc, char *argv[])
         // Do things
         ros::spinOnce();
 
-        // Zero the torque and set the message timestamp
+        // Zero the torque
         control_message.motor_torque.fill(0.0);
 
         // Main state machine
         if (is_initialized) {
             switch (mode) {
             case -1 : {
-                for (unsigned int i = 0; i<10; ++i) {
-                    control_message.motor_torque[i] = 0.0;
-                }
-
+                control_message.motor_torque.fill(0.0);
                 if (mode_command > -1) {
                     ROS_INFO("Transitioning to standing control!");
                     stand_control.reset();
@@ -125,7 +122,6 @@ int main(int argc, char *argv[])
                     stand_control.getDebug(standlog);
                     logfileStand.write(reinterpret_cast<char *>(standlog.data()), (standlog.size())*sizeof(double));
                 }
-
                 if (mode_command < 0) {
                     ROS_INFO("Transitioning to null control!");
                     mode = -1;
@@ -142,13 +138,14 @@ int main(int argc, char *argv[])
         control_message.header.stamp = ros::Time::now();
         controller_pub.publish(control_message);
 
+        // Sleep
         looprate.sleep();
     }
 
+    // Close please
     if ( log_controller ) {
         logfileStand.close();
     }
-
     return 0;
 }
 
