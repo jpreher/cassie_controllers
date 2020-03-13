@@ -64,6 +64,8 @@ private:
         Eigen::EulerAnglesZYXd euler;
         Eigen::VectorXd target_velocities;
         Eigen::VectorXd IK_solution;
+        Eigen::MatrixXd pLF_actual;
+        Eigen::MatrixXd pRF_actual;
 
         // QP cache allocation
         MatrixXd Jc;
@@ -103,6 +105,10 @@ private:
         Eigen::VectorXd IK_solution_prev;
         double spoolup;
         bool contact_initialized;
+
+        bool crouchOverrideCompleted;
+        bool crouchOverrideInitialized;
+        ros_utilities::Timer crouchOverrideTimer = ros_utilities::Timer(true);
 
         Eigen::VectorXd dyd_last;
 
@@ -218,6 +224,8 @@ private:
     void runInverseKinematics(MatrixXd &pLF, MatrixXd &pRF);
     VectorXd getTorqueQP();
     VectorXd getTorqueID();
+    void computeDesired(VectorXd &radio);
+    void computeActual();
 
     // Filters for smoothing joystick commands
     control_utilities::LowPassFilter heightFilter = control_utilities::LowPassFilter(NAN, NAN);

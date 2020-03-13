@@ -71,6 +71,8 @@ void StandingControlQP::Cache::init() {
     this->target_velocities.resize(10);
     this->IK_solution.resize(10);
     this->Jik.resize(10,10);
+    this->pLF_actual.resize(5,1);
+    this->pRF_actual.resize(5,1);
 
     // Reset
     this->reset();
@@ -125,6 +127,8 @@ void StandingControlQP::Cache::reset() {
     this->leftTwist.setZero();
     this->rightTwist.setZero();
     this->pitch_desired = 0;
+    this->pLF_actual.setZero();
+    this->pRF_actual.setZero();
 }
 
 void StandingControlQP::Memory::init() {
@@ -149,6 +153,10 @@ void StandingControlQP::Memory::reset() {
     this->dyd_last.setZero();
     this->qp_initialized = false;
     this->timer.restart();
+
+    this->crouchOverrideCompleted = false;
+    this->crouchOverrideInitialized = false;
+    this->crouchOverrideTimer.restart();
 }
 
 void StandingControlQP::Config::init() {
@@ -394,9 +402,8 @@ void StandingControlQP::update(VectorXd &radio, VectorXd &u) {
     }
 
     // Get current foot positions (using leg deflections!)
-    MatrixXd pLF_actual(5,1), pRF_actual(5,1);
-    SymFunction::p_leftSole_constraint(pLF_actual, this->robot->q);
-    SymFunction::p_rightSole_constraint(pRF_actual, this->robot->q);
+    SymFunction::p_leftSole_constraint(this->cache.pLF_actual, this->robot->q);
+    SymFunction::p_rightSole_constraint(this->cache.pRF_actual, this->robot->q);
 
     // If initializing, start the timer and set feet
     if (this->memory.mode == -1) {
@@ -409,35 +416,77 @@ void StandingControlQP::update(VectorXd &radio, VectorXd &u) {
     this->processRadio(radio);
 
     // Compute the actual and desired outputs
-    this->robot->q.segment(BasePosX,3) = -(pLF_actual.block(0,0,3,1) + pRF_actual.block(0,0,3,1))/2.0;
-    this->cache.ya  << this->robot->q.segment(BasePosX,6);
-    this->cache.yd  << this->config.x_com_offset, -this->lateralFilter.getValue(), -this->heightFilter.getValue(), 0., 0., 0.;
-    this->cache.dya << this->robot->dq.segment(BasePosX,6);
-    this->cache.dyd.segment(0,3) << -( this->cache.leftTwist.segment(0,3) + this->cache.rightTwist.segment(0,3) ) / 2.0;
-    this->cache.d2yd = (this->cache.dyd - this->memory.dyd_last) / this->config.control_rate;
-    for (int i=0; i<6; i++)
-        this->cache.d2yd[i] = control_utilities::clamp(this->cache.d2yd[i], -0.75, 0.75);
-    this->memory.dyd_last = this->cache.dyd;
-
-    //std::cout << -(( this->cache.leftTwist.segment(0,3) + this->cache.rightTwist.segment(0,3) ) / 2.0).transpose() << std::endl;
-
-    this->cache.eta << this->cache.ya - this->cache.yd, this->cache.dya - this->cache.dyd;
-    SymFunction::Dya_standCOM(this->cache.Dya, this->robot->q);
-    SymFunction::DLfya_standCOM(this->cache.DLfya, this->robot->q, this->robot->dq);
+    this->computeDesired(radio);
+    this->computeActual();
 
     // Compute controller
     if ( this->memory.contact_initialized && this->config.use_qp ) {
         u = this->getTorqueQP();
     } else {
-        this->runInverseKinematics(pLF_actual, pRF_actual);
+        this->runInverseKinematics(this->cache.pLF_actual, this->cache.pRF_actual);
         u = this->getTorqueID();
     }
 
     // Check if we are at the end of the transition phase
     if (this->memory.queueTransition) {
-        if ( (this->heightFilter.getValue() < 0.99 * this->config.height_lb) && (this->heightFilter.getValue() < 0.99 * this->config.height_lb) ) {
+        if ( (this->heightFilter.getValue() < 0.99 * this->config.height_lb) ) {
             this->memory.readyToTransition = true;
         }
+    }
+}
+
+void StandingControlQP::computeActual() {
+    this->robot->q.segment(BasePosX,3) = -(this->cache.pLF_actual.block(0,0,3,1) + this->cache.pRF_actual.block(0,0,3,1))/2.0;
+    this->cache.ya  << this->robot->q.segment(BasePosX,6);
+    this->cache.dya << this->robot->dq.segment(BasePosX,6);
+    this->cache.eta << this->cache.ya - this->cache.yd, this->cache.dya - this->cache.dyd;
+    SymFunction::Dya_standCOM(this->cache.Dya, this->robot->q);
+    SymFunction::DLfya_standCOM(this->cache.DLfya, this->robot->q, this->robot->dq);
+}
+
+void StandingControlQP::computeDesired(VectorXd &radio) {
+    this->cache.yd  << this->config.x_com_offset, -this->lateralFilter.getValue(), -this->heightFilter.getValue(), 0., 0., 0.;
+    this->cache.dyd.segment(0,3) << -( this->cache.leftTwist.segment(0,3) + this->cache.rightTwist.segment(0,3) ) / 2.0;
+    this->cache.d2yd = (this->cache.dyd - this->memory.dyd_last) / this->config.control_rate;
+    for (int i=0; i<6; i++)
+        this->cache.d2yd[i] = control_utilities::clamp(this->cache.d2yd[i], -0.75, 0.75);
+    this->memory.dyd_last = this->cache.dyd;
+    this->cache.d2yd.setZero(); // Hack... lowpass with timing jitter too discontinuous out of Gazebo
+
+    // Override the crouch with a dynamic and continuous crouch
+    bool triggerCrouch = (-radio(SH) > 0.) && (this->heightFilter.getValue() < 0.99 * this->config.height_lb);
+
+    // Check for start condition
+    if (triggerCrouch && !this->memory.crouchOverrideInitialized) {
+        this->memory.crouchOverrideCompleted = false;
+        this->memory.crouchOverrideTimer.restart();
+        this->memory.crouchOverrideInitialized = true;
+    }
+    // Check for end condition
+    if (triggerCrouch && this->memory.crouchOverrideCompleted) {
+        this->memory.crouchOverrideCompleted = false;
+        this->memory.crouchOverrideTimer.restart();
+        this->memory.crouchOverrideInitialized = false;
+    }
+
+    double dt = this->memory.crouchOverrideTimer.elapsed();
+    if (this->memory.crouchOverrideInitialized ) {
+        double zheight, zvelocity, zaccel;
+        if (dt <= 2) {
+            zheight = 0.90 - 0.4 / (1+exp(10 - 9*dt));
+            zvelocity = -(18*exp(10 - 9*dt))/(5*pow((exp(10 - 9*dt) + 1),2));
+            zaccel = (162*exp(10 - 9*dt))/(5*pow((exp(10 - 9*dt) + 1),2)) - (324*exp(20 - 18*dt))/(5*pow((exp(10 - 9*dt) + 1),3));
+        } else {
+            zheight = 0.5 + 0.4 / (1+exp(26 - 9*dt));
+            zvelocity = (18*exp(26 - 9*dt))/(5*pow((exp(26 - 9*dt) + 1),2));
+            zaccel = (324*exp(52 - 18*dt))/(5*pow((exp(26 - 9*dt) + 1),3)) - (162*exp(26 - 9*dt))/(5*pow((exp(26 - 9*dt) + 1),2));
+        }
+        if (dt > 4.) 
+            this->memory.crouchOverrideCompleted = true;
+
+        this->cache.yd(2) = zheight;
+        this->cache.dyd(2) = zvelocity;
+        this->cache.d2yd(2) = zaccel;
     }
 }
 
@@ -494,7 +543,6 @@ VectorXd StandingControlQP::getTorqueQP() {
     Jdotddq << this->cache.DLfya.block(0,0,6,22),
             this->cache.dJc;
     ddq_tar = Jddq.inverse() * (ddr_tar - Jdotddq * this->robot->dq);
-    std::cout << ddq_tar.transpose() << std::endl;
 
     // CLF terms
     this->cache.V = this->cache.eta.transpose() * this->config.P * this->cache.eta;
