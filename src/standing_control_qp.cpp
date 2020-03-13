@@ -453,7 +453,8 @@ void StandingControlQP::computeDesired(VectorXd &radio) {
     this->cache.d2yd.setZero();
 
     ////////////////////// FOR TESTING \\\\\\\\\\\\\\\\\\\\\\\\
-    // Override the crouch with a dynamic and continuous crouch
+    // The state machine could be cleaned up... but it works fine.
+    // Override the crouch with a dynamic and continuous crouch.
     bool triggerCrouch = (-radio(SH) > 0.) && (this->heightFilter.getValue() < 0.99 * this->config.height_lb);
 
     // Check for start condition
@@ -470,7 +471,7 @@ void StandingControlQP::computeDesired(VectorXd &radio) {
     }
 
     double dt = this->memory.crouchOverrideTimer.elapsed();
-    if (this->memory.crouchOverrideInitialized ) {
+    if ( this->memory.crouchOverrideInitialized ) {
         double zheight, zvelocity, zaccel;
         if (dt <= 2) {
             zheight = 0.90 - 0.4 / (1+exp(10 - 9*dt));
@@ -481,8 +482,10 @@ void StandingControlQP::computeDesired(VectorXd &radio) {
             zvelocity = (18*exp(26 - 9*dt))/(5*pow((exp(26 - 9*dt) + 1),2));
             zaccel = (324*exp(52 - 18*dt))/(5*pow((exp(26 - 9*dt) + 1),3)) - (162*exp(26 - 9*dt))/(5*pow((exp(26 - 9*dt) + 1),2));
         }
-        if (dt > 4.) 
+        if (dt > 4.) {
             this->memory.crouchOverrideCompleted = true;
+            this->memory.crouchOverrideInitialized = false;
+        }
 
         this->cache.yd(2) = zheight;
         this->cache.dyd(2) = zvelocity;
