@@ -413,6 +413,7 @@ void StandingControlQP::update(VectorXd &radio, VectorXd &u) {
 
     // Compute the actual and desired outputs
     this->computeDesired(radio);
+    this->cache.yd(0) -= 0.0068 * this->cache.yd(2) - 0.02562; // Linear fit of COM on range of motion...
     this->computeActual();
 
     // Compute controller
@@ -433,33 +434,12 @@ void StandingControlQP::update(VectorXd &radio, VectorXd &u) {
 }
 
 void StandingControlQP::computeActual() {
-
-    // Pelvis rotation
-    Eigen::Matrix3d Rx, Ry, R;
-    Rx << 1.,0.,0.,
-          0., cos(this->robot->q(BaseRotX)), -sin(this->robot->q(BaseRotX)),
-          0., sin(this->robot->q(BaseRotX)), cos(this->robot->q(BaseRotX));
-    Ry << cos(this->robot->q(BaseRotY)), 0, sin(this->robot->q(BaseRotY)),
-          0.,1.,0.,
-          -sin(this->robot->q(BaseRotY)), 0, cos(this->robot->q(BaseRotY));
-    R << Ry * Rx;
-
-    // COM Offset
-    MatrixXd com_position(3,1);
-    SymFunction::p_com(com_position, this->robot->q);
-    com_position = R * com_position;
-
     // Targets
     VectorXd qb(6);
     qb << this->robot->q.segment(BasePosX,6);
     qb.segment(BasePosX,3) = -(this->cache.pLF_actual.block(0,0,3,1) + this->cache.pRF_actual.block(0,0,3,1))/2.0;
-    this->cache.ya  << qb;
-    this->cache.ya(0) -= com_position(0);
-    this->cache.ya(1) -= com_position(1);
-
+    this->cache.ya  << qb; 
     this->cache.dya << this->robot->dq.segment(BasePosX,6);
-
-    // Add offsets for COM
 
     // Comine
     this->cache.eta << this->cache.ya - this->cache.yd, this->cache.dya - this->cache.dyd;
@@ -572,7 +552,7 @@ VectorXd StandingControlQP::getTorqueQP() {
             this->cache.Jc;
     Jdotddq << this->cache.DLfya.block(0,0,6,22),
             this->cache.dJc;
-    ddq_tar = Jddq.inverse() * (ddr_tar - Jdotddq * this->robot->dq);
+    ddq_tar = Jddq.completeOrthogonalDecomposition().solve(ddr_tar - Jdotddq * this->robot->dq);
 
     // CLF terms
     this->cache.V = this->cache.eta.transpose() * this->config.P * this->cache.eta;
