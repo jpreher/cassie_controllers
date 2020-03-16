@@ -433,9 +433,35 @@ void StandingControlQP::update(VectorXd &radio, VectorXd &u) {
 }
 
 void StandingControlQP::computeActual() {
-    this->robot->q.segment(BasePosX,3) = -(this->cache.pLF_actual.block(0,0,3,1) + this->cache.pRF_actual.block(0,0,3,1))/2.0;
-    this->cache.ya  << this->robot->q.segment(BasePosX,6);
+
+    // Pelvis rotation
+    Eigen::Matrix3d Rx, Ry, R;
+    Rx << 1.,0.,0.,
+          0., cos(this->robot->q(BaseRotX)), -sin(this->robot->q(BaseRotX)),
+          0., sin(this->robot->q(BaseRotX)), cos(this->robot->q(BaseRotX));
+    Ry << cos(this->robot->q(BaseRotY)), 0, sin(this->robot->q(BaseRotY)),
+          0.,1.,0.,
+          -sin(this->robot->q(BaseRotY)), 0, cos(this->robot->q(BaseRotY));
+    R << Ry * Rx;
+
+    // COM Offset
+    MatrixXd com_position(3,1);
+    SymFunction::p_com(com_position, this->robot->q);
+    com_position = R * com_position;
+
+    // Targets
+    VectorXd qb(6);
+    qb << this->robot->q.segment(BasePosX,6);
+    qb.segment(BasePosX,3) = -(this->cache.pLF_actual.block(0,0,3,1) + this->cache.pRF_actual.block(0,0,3,1))/2.0;
+    this->cache.ya  << qb;
+    this->cache.ya(0) -= com_position(0);
+    this->cache.ya(1) -= com_position(1);
+
     this->cache.dya << this->robot->dq.segment(BasePosX,6);
+
+    // Add offsets for COM
+
+    // Comine
     this->cache.eta << this->cache.ya - this->cache.yd, this->cache.dya - this->cache.dyd;
     SymFunction::Dya_standCOM(this->cache.Dya, this->robot->q);
     SymFunction::DLfya_standCOM(this->cache.DLfya, this->robot->q, this->robot->dq);
@@ -706,8 +732,6 @@ VectorXd StandingControlQP::getTorqueID() {
         dq_motors(i) = this->robot->dq(ind);
     }
 
-    this->cache.dq_desired *= 0.;
-
     // Compute torques via PD
     u = this->pd.compute(this->cache.IK_solution, this->cache.dq_desired, q_motors, dq_motors);
 
@@ -749,8 +773,8 @@ VectorXd StandingControlQP::getTorqueID() {
         u += ff;
 
         // Add a naiive toe regulator...
-        //u(4) -= 15. * (this->robot->q(BaseRotY) - this->cache.pitch_desired) + 1. * this->robot->dq(BaseRotY);
-        //u(9) -= 15. * (this->robot->q(BaseRotY) - this->cache.pitch_desired) + 1. * this->robot->dq(BaseRotY);
+        u(4) -= 45. * (this->robot->q(BaseRotY) - this->cache.pitch_desired) + 2. * this->robot->dq(BaseRotY);
+        u(9) -= 45. * (this->robot->q(BaseRotY) - this->cache.pitch_desired) + 2. * this->robot->dq(BaseRotY);
     }
     return u;
 }
@@ -768,15 +792,12 @@ void StandingControlQP::runInverseKinematics(MatrixXd &pLF, MatrixXd &pRF) {
     footDiff = this->memory.T_leftContact.translation() - this->memory.T_rightContact.translation();
 
     // X position
-    this->cache.T_des_leftFoot(0,3)  = this->leftXFilter.getValue();
-    this->cache.T_des_rightFoot(0,3) = this->rightXFilter.getValue();
-    double xoffset = (pLF(0) + pRF(0)) / 2.0 + this->config.x_com_offset;
-    this->cache.T_des_leftFoot(0,3)  -= this->memory.spoolup * xoffset;
-    this->cache.T_des_rightFoot(0,3) -= this->memory.spoolup * xoffset;
+    this->cache.T_des_leftFoot(0,3)  = -footDiff(0) - this->cache.yd(0);
+    this->cache.T_des_rightFoot(0,3) =  footDiff(0) - this->cache.yd(0);
 
-    // Y position WRONG!
-    this->cache.T_des_leftFoot(1,3)  =  footDiff(1) / 2. + this->lateralFilter.getValue();
-    this->cache.T_des_rightFoot(1,3) = -footDiff(1) / 2. - this->lateralFilter.getValue();
+    // Y position
+    this->cache.T_des_leftFoot(1,3)  =  footDiff(1) / 2. - this->cache.yd(1);
+    this->cache.T_des_rightFoot(1,3) = -footDiff(1) / 2. - this->cache.yd(1);
 
     // Z position
     double roll  = this->robot->q(3);
@@ -784,8 +805,8 @@ void StandingControlQP::runInverseKinematics(MatrixXd &pLF, MatrixXd &pRF) {
     double lateralStabilizer = 0.0;
     if (this->config.use_lateral_comp)
         lateralStabilizer = this->memory.spoolup * (this->config.Kp_lateral_compensator * roll + this->config.Kd_lateral_compensator * droll);
-    this->cache.T_des_leftFoot(2,3)  = this->heightFilter.getValue()  + lateralStabilizer / 2.0;
-    this->cache.T_des_rightFoot(2,3) = this->heightFilter.getValue() - lateralStabilizer / 2.0;
+    this->cache.T_des_leftFoot(2,3)  = -this->cache.yd(2)  + lateralStabilizer / 2.0;
+    this->cache.T_des_rightFoot(2,3) = -this->cache.yd(2) - lateralStabilizer / 2.0;
 
     // Set residual function target
     double footpitch_target = 0.0;
@@ -802,8 +823,8 @@ void StandingControlQP::runInverseKinematics(MatrixXd &pLF, MatrixXd &pRF) {
     }
 
     // Compute the desired velocities
-    this->cache.target_velocities << this->cache.leftTwist.block(0,0,3,1),  0.0, -this->cache.leftTwist(3),
-                                     this->cache.rightTwist.block(0,0,3,1),  0.0, -this->cache.rightTwist(3);
+    this->cache.target_velocities << this->cache.dyd.segment(0,3),  0.0, -this->cache.dyd(4),
+                                     this->cache.dyd.segment(0,3),  0.0, -this->cache.dyd(4);
 
     this->IKfunction.df(this->cache.IK_solution, this->cache.Jik);
     this->cache.dq_desired = this->cache.Jik.inverse() * this->cache.target_velocities;
@@ -923,9 +944,6 @@ void StandingControlQP::processRadio(VectorXd &radio) {
     //Vector3d w(0.0, this->cache.leftTwist(3), 0.0);
     //this->cache.leftTwist.block(0,0,3,1) = skew(w) * this->cache.leftTwist.block(0,0,3,1);
     //this->cache.rightTwist.block(0,0,3,1) = skew(w) * this->cache.rightTwist.block(0,0,3,1);
-
-
-
 
     /*
     // Turn off chatter?
