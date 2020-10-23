@@ -427,7 +427,7 @@ void StandingControlQP::update(VectorXd &radio, VectorXd &u) {
     // Check if we are at the end of the transition phase...
     // This is implemented for transitioning to our walking controller. Not currently released.
     if (this->memory.queueTransition) {
-        if ( (this->heightFilter.getValue() < 0.99 * this->config.height_lb) ) {
+        if ( (this->heightFilter.getValue() < 0.95 * this->config.height_lb) ) {
             this->memory.readyToTransition = true;
         }
     }
@@ -559,7 +559,7 @@ VectorXd StandingControlQP::getTorqueQP() {
     double LFV = this->cache.eta.transpose() * this->config.LFV_mat * this->cache.eta;
     MatrixXd LGV(1,6);
     LGV << 2. * this->cache.eta.transpose() * this->config.P * this->config.G;
-    double LGVpsi1 = (LGV* (this->cache.DLfya.block(0,0,6,22) * this->robot->dq)).value();
+    double LGVpsi1 = (LGV* (this->cache.DLfya.block(0,0,6,22) * this->robot->dq - this->cache.d2yd)).value();
 
     // CLF Constraint as inequality
     this->cache.A_clf.block(0,0,1,22) = LGV * this->cache.Dya.block(0,0,6,22);
@@ -601,7 +601,13 @@ VectorXd StandingControlQP::getTorqueQP() {
     // Construct the cost
     // 0.5*x'*H*x + f'*x
     // Cost weighting terms
-    VectorXd w_reg(49);
+    MatrixXd A_reg = MatrixXd::Identity(49,49);
+    VectorXd w_reg(49), b_reg(49);
+    b_reg.setZero();
+    b_reg.segment(0,22) << ddq_tar;
+    b_reg(41) = 150.;
+    b_reg(46) = 150.;
+
     w_reg << this->config.reg_ddq * VectorXd::Ones(22),    // ddq
             this->config.reg_u * VectorXd::Ones(10),       // u
             this->config.reg_achilles * VectorXd::Ones(2), // lambda_ach
@@ -632,19 +638,22 @@ VectorXd StandingControlQP::getTorqueQP() {
 
     // Build the final QP formulation
     long n_var = 49;
-    long n_cost_terms = w_hol.size() + w_u_chatter.size() + 6; //+ w_reg.size()
+    long n_cost_terms = w_hol.size() + w_u_chatter.size() + A_reg.rows() + 6; //+ w_reg.size()
     VectorXd w(n_cost_terms);
     Eigen::Matrix<double,Dynamic,Dynamic,RowMajor> A(n_cost_terms,n_var); // Gets passed directly to
     VectorXd b(n_cost_terms);
     w << w_hol,
             w_u_chatter,
-            this->config.w_outputs * VectorXd::Ones(6);
+            this->config.w_outputs * VectorXd::Ones(6),
+            w_reg;
     A << this->cache.A_holonomics,
             this->cache.A_chatter,
-            this->cache.A_y;
+            this->cache.A_y,
+            A_reg;
     b << this->cache.b_holonomics,
             this->cache.b_chatter,
-            this->cache.b_y;
+            this->cache.b_y,
+            b_reg;
     for (int i=0; i<w.size(); i++) {
         b(i) *= w(i);
         A.row(i) *= w(i);
@@ -655,9 +664,9 @@ VectorXd StandingControlQP::getTorqueQP() {
     Eigen::Matrix<double,Dynamic,Dynamic,RowMajor> G(49,49);
     VectorXd g(49);
     G << A.transpose() * A;
-    G.diagonal() += w_reg;
+    //G.diagonal() += w_reg;
     g << -A.transpose() * b;
-    g.segment(0,22) -= ddq_tar * w_reg.segment(0,22);
+    //g.segment(0,22) -= ddq_tar.cwiseProduct(w_reg.segment(0,22));
 
     if (this->config.clf_use_Vdot_cost)
         g.segment(0,22) += this->config.w_Vdot * (LGV * this->cache.Dya.block(0,0,6,22)).transpose();
@@ -684,6 +693,7 @@ VectorXd StandingControlQP::getTorqueQP() {
         this->memory.qp_initialized = true;
     }
 
+
     // Get solution
     VectorXd torqueScale(10);
     torqueScale << 25., 25., 16., 16., 50., 25., 25., 16., 16., 50.;
@@ -691,10 +701,16 @@ VectorXd StandingControlQP::getTorqueQP() {
     this->qpsolver->getPrimalSolution(static_cast<real_t*>(this->cache.qpsol.data()));
     if (success != SUCCESSFUL_RETURN) {
         ROS_WARN("THE QP DID NOT CONVERGE!");
+        this->runInverseKinematics(this->cache.pLF_actual, this->cache.pRF_actual);
+        u = this->getTorqueID();
         this->qpsolver->reset();
         this->memory.qp_initialized = false;
+        this->memory.u_prev.setZero();
     }
-    u << torqueScale.cwiseProduct(this->cache.qpsol.segment(22,10));
+    else {
+        this->memory.u_prev = this->cache.qpsol.segment(22,10);
+        u << torqueScale.cwiseProduct(this->cache.qpsol.segment(22,10));
+    }
     this->cache.Fdes << this->cache.qpsol.segment(32,16);
     this->cache.delta = this->cache.qpsol(48);
 
