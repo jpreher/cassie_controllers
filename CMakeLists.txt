@@ -54,6 +54,7 @@ include_directories(include ${catkin_INCLUDE_DIRS})
 # Create controller libraries
 add_library(${PROJECT_NAME}
     src/standing_control_qp.cpp
+    src/walking_onedomain.cpp
     src/inverse_kinematics.cpp)
 add_dependencies(${PROJECT_NAME} ${catkin_EXPORTED_TARGETS})
 target_link_libraries(${PROJECT_NAME} ${catkin_LIBRARIES})

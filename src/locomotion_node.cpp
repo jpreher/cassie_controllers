@@ -31,6 +31,7 @@
 
 // Controllers
 #include <cassie_controllers/standing_control_qp.hpp>
+#include <cassie_controllers/walking_onedomain.hpp>
 
 // Load in message types
 #include <cassie_common_toolbox/callback_helpers.hpp>
@@ -41,6 +42,7 @@
 
 // Logging
 #include <fstream>
+#include <cmath>
 
 using namespace Eigen;
 using namespace cassie_model;
@@ -79,16 +81,26 @@ int main(int argc, char *argv[])
 
     // Create the associated controllers
     StandingControlQP stand_control(nh, robot);
+    Walking1DControl step_1dom_control(nh, robot);
 
     // Logging things
+    VectorXd qplog(81); qplog.setZero();
+    VectorXd pdlog(59); pdlog.setZero();
     VectorXd standlog(59); standlog.setZero();
-    std::fstream logfileStand;
+    std::fstream logfileStand, logfileWalk;
     bool log_controller = false;
     ros::param::get("/cassie/log_controller", log_controller);
     if ( log_controller ) {
         std::string home=getenv("HOME");
+
+        {
+        std::string path= home+"/datalog/qp_walk_log.bin";
+        logfileWalk.open(path, std::ios::out | std::ios::binary);
+        }
+        {
         std::string path= home+"/datalog/stand_log.bin";
         logfileStand.open(path, std::ios::out | std::ios::binary);
+        }
     }
 
     // Listen/respond loop
@@ -98,14 +110,18 @@ int main(int argc, char *argv[])
         // Do things
         ros::spinOnce();
 
-        // Zero the torque
+        // Zero the torque and set the message timestamp
         control_message.motor_torque.fill(0.0);
 
         // Main state machine
         if (is_initialized) {
+
             switch (mode) {
             case -1 : {
-                control_message.motor_torque.fill(0.0);
+                for (unsigned int i = 0; i<10; ++i) {
+                    control_message.motor_torque[i] = 0.0;
+                }
+
                 if (mode_command > -1) {
                     ROS_INFO("Transitioning to standing control!");
                     stand_control.reset();
@@ -122,7 +138,37 @@ int main(int argc, char *argv[])
                     stand_control.getDebug(standlog);
                     logfileStand.write(reinterpret_cast<char *>(standlog.data()), (standlog.size())*sizeof(double));
                 }
+
                 if (mode_command < 0) {
+                    ROS_INFO("Transitioning to null control!");
+                    mode = -1;
+                }
+                if ( (mode_command > 0) && (stand_control.isReadyToTransition()) ) {
+                    ROS_INFO("Transitioning to stepping control!");
+                    step_1dom_control.reset();
+                    mode = 1;
+                    stand_control.reset();
+                }
+                break;
+            }
+            case 1: {
+                step_1dom_control.update(radio, u);
+                for (unsigned int i = 0; i<10; ++i) {
+                    control_message.motor_torque[i] = u(i);
+                }
+
+                if ( log_controller ) {
+                    step_1dom_control.getDebug(qplog);
+                    logfileWalk.write(reinterpret_cast<char *>(qplog.data()), (qplog.size())*sizeof(double));
+                }
+
+                if ( (mode_command == 0) && ( step_1dom_control.isReadyToTransition() ) ) {
+                    ROS_INFO("Transitioning to standing control!");
+                    step_1dom_control.reset();
+                    stand_control.reset();
+                    mode = 0;
+                }
+                if (mode_command == -1) {
                     ROS_INFO("Transitioning to null control!");
                     mode = -1;
                 }
@@ -134,19 +180,28 @@ int main(int argc, char *argv[])
             }
         }
 
+        for (unsigned int i = 0; i<10; ++i) {
+            bool val = std::isnan(control_message.motor_torque[i]);
+            if ( val ) {
+                control_message.motor_torque.fill(0.0);
+                control_message.header.stamp = ros::Time::now();
+                controller_pub.publish(control_message);
+                ROS_ERROR("The controller generated a nan torque!!!!!!!");
+                return 1;
+            }
+        }
+
         // Publish the control message
         control_message.header.stamp = ros::Time::now();
         controller_pub.publish(control_message);
 
-        // Sleep
         looprate.sleep();
     }
 
-    // Close please
     if ( log_controller ) {
+        logfileWalk.close();
         logfileStand.close();
     }
+
     return 0;
 }
-
-
