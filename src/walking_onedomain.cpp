@@ -1,5 +1,25 @@
-/**
-    @author Jenna Reher (jreher@caltech.edu)
+/*
+ * MIT License
+ *
+ * Copyright (c) 2020 Jenna Reher (jreher@caltech.edu)
+ *
+ * Permission is hereby granted, free of charge, to any person obtaining a copy
+ * of this software and associated documentation files (the "Software"), to deal
+ * in the Software without restriction, including without limitation the rights
+ * to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+ * copies of the Software, and to permit persons to whom the Software is
+ * furnished to do so, subject to the following conditions:
+ *
+ * The above copyright notice and this permission notice shall be included in all
+ * copies or substantial portions of the Software.
+ *
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+ * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+ * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+ * AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+ * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+ * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+ * SOFTWARE.
 */
 
 #include <cassie_controllers/walking_onedomain.hpp>
@@ -687,14 +707,11 @@ void Walking1DControl::nextDomain() {
 
     // Update Raibert controller things
     this->memory.lastStepVelocity = this->memory.velocityAllocator / (double)this->memory.nVelocitySamplesThisStep;
-    // this->memory.lastStepVelocity(0) = this->rateStepX.update(0.4, this->memory.lastStepVelocity(0));
-    // this->memory.lastStepVelocity(1) = this->rateStepY.update(0.4, this->memory.lastStepVelocity(1));
     this->memory.velocityAllocator.setZero();
     this->memory.nVelocitySamplesThisStep = 0;
 
     // Store terminal raibert offset
     this->memory.raibert_offset_last << this->cache.raibert_offset;
-    //    std::cout << this->memory.raibert_offset_last.transpose() << std::endl;
 
     this->rateRaibertX.reset(0.);
     this->rateRaibertY.reset(0.);
@@ -869,5 +886,5 @@ void Walking1DControl::getDebug(VectorXd &dbg) {
             this->lpVaXlastStep.getValue(), this->lpVaYlastStep.getValue(), //2
             this->cache.raibert_offset, // 3
             this->cache.uff; // 10
-    // ndbg = 76// + 44
+    // ndbg = 76
 }

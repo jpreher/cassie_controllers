@@ -201,9 +201,6 @@ private:
     // Pointer to robot model
     cassie_model::Cassie *robot;
 
-    // Feedforward controller
-    feedforward_underactuated ff;
-
     // Gait phasing variable
     PhaseVariable phase;
 
