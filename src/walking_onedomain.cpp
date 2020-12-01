@@ -111,6 +111,7 @@ void Walking1DControl::Memory::reset() {
     this->nVelocitySamplesThisStep = 0;
     this->lastTau = 0;
     this->qp_initialized = false;
+    this->leg_angle_offset = 0.;
     this->u_prev.setZero();
     this->vd_integral_error.setZero();
 }
@@ -136,6 +137,7 @@ void Walking1DControl::Config::reconfigure() {
     this->paramChecker.checkAndUpdateYaml("qp/kd", this->Kdy);//("qp/kd", this->Kd);
     this->paramChecker.checkAndUpdate("left_stance_gravity_scale", this->left_stance_gravity_scale);
     this->paramChecker.checkAndUpdate("right_stance_gravity_scale", this->right_stance_gravity_scale);
+    this->paramChecker.checkAndUpdate("velocity_integrator_bleed_constant", this->velocity_integrator_bleed_constant);
 
     std::string raw_file_path, local_path;
     YAML::Node doc;
@@ -210,11 +212,11 @@ void Walking1DControl::Config::reconfigure() {
     // Safe torque bounds
     this->torque_bounds.resize(10);
     this->torque_bounds << 4.5, 4.5, 12.2, 12.2, 0.9,
-            4.5, 4.5, 12.2, 12.2, 0.9;
+                           4.5, 4.5, 12.2, 12.2, 0.9;
 }
 
 Walking1DControl::Walking1DControl(ros::NodeHandle &nh, cassie_model::Cassie &robot) :
-    nh(&nh), ff(robot) {
+    nh(&nh), tarsusSolver(robot) {
     // Main setup
     this->robot = &robot;
 
@@ -249,6 +251,7 @@ void Walking1DControl::reset() {
     this->rateStepX.reset(0.);
     this->rateStepY.reset(0.);
     this->stepPeriodAverager.reset();
+    this->tarsusSolver.reset();
 }
 
 bool Walking1DControl::reconfigure() {
@@ -262,10 +265,6 @@ bool Walking1DControl::reconfigure() {
     this->config.paramChecker.checkAndUpdate("raibert/KdX", this->config.raibert_KdX);
     this->config.paramChecker.checkAndUpdate("raibert/KdY", this->config.raibert_KdY);
     this->config.paramChecker.checkAndUpdate("raibert/phaseThreshold", this->config.raibert_phaseThreshold);
-
-
-    this->config.paramChecker.checkAndUpdate("grf_KpX", this->config.grf_KpX);
-    this->config.paramChecker.checkAndUpdate("grf_KpY", this->config.grf_KpY);
 
     this->config.paramChecker.checkAndUpdate("ddq_KpX", this->config.ddq_KpX);
     this->config.paramChecker.checkAndUpdate("ddq_KdX", this->config.ddq_KdX);
@@ -324,6 +323,25 @@ void Walking1DControl::update(VectorXd &radio, VectorXd &u) {
         this->memory.isInitialized = true;
     }
 
+    // Rigidify swing leg measurements
+    double lC=0.;
+    double rC=0.;
+    this->tarsusSolver.update();
+    if (this->memory.iDomain == 0) {rC = 1.; lC = 0.;}
+    if (this->memory.iDomain != 0) {rC = 0.; lC = 1.;}
+    robot->q(LeftShinPitch)    *= lC;
+    robot->q(LeftHeelSpring)   *= lC;
+    robot->q(RightHeelSpring)  *= rC;
+    robot->q(RightShinPitch)   *= rC;
+    robot->dq(LeftShinPitch)   *= lC;
+    robot->dq(LeftHeelSpring)  *= lC;
+    robot->dq(RightHeelSpring) *= rC;
+    robot->dq(RightShinPitch)  *= rC;
+    robot->q(LeftTarsusPitch)   = lC*robot->q(LeftTarsusPitch) + (1.0 - lC)*this->tarsusSolver.getLeftRigidTarsusPosition();
+    robot->q(RightTarsusPitch)  = rC*robot->q(RightTarsusPitch) + (1.0 - rC)*this->tarsusSolver.getRightRigidTarsusPosition();
+    robot->dq(LeftTarsusPitch)  = lC*robot->dq(LeftTarsusPitch) + (1.0 - lC)*this->tarsusSolver.getLeftRigidTarsusVelocity();
+    robot->dq(RightTarsusPitch) = rC*robot->dq(RightTarsusPitch) + (1.0 - rC)*this->tarsusSolver.getRightRigidTarsusVelocity();
+
     // Pull the radio outputs for movement
     bool requestTransition = (radio(SB) < 1.0);
     double x_offset = this->config.x_offset;
@@ -360,8 +378,8 @@ void Walking1DControl::update(VectorXd &radio, VectorXd &u) {
     double iy = dt * (lpVaY.getValue() - yVd);
 
     // Always decay
-    this->memory.vd_integral_error(0) *= 0.9995;
-    this->memory.vd_integral_error(1) *= 0.9995;
+    this->memory.vd_integral_error(0) *= this->config.velocity_integrator_bleed_constant;
+    this->memory.vd_integral_error(1) *= this->config.velocity_integrator_bleed_constant;
     this->memory.vd_integral_error(0) += ix;
     this->memory.vd_integral_error(1) += iy;
 
@@ -371,7 +389,6 @@ void Walking1DControl::update(VectorXd &radio, VectorXd &u) {
     this->computeDesired(this->cache.yd, this->cache.dyd, this->cache.d2yd);
 
     // Augment polynomials for foot placement and dynamics feedback
-    this->cache.yd(5) += 0.037 + 0.05 * radio(S1); // Swing leg angle offset
     this->updateTurning(yawRate);
     this->updateRaibert(xVd, yVd);
     this->updateAccelerations(xVd, yVd);
@@ -381,7 +398,7 @@ void Walking1DControl::update(VectorXd &radio, VectorXd &u) {
         ROS_WARN("THE QP CONTROLLER IS NOT IMPLEMENTED IN THIS VERSION!");
         this->cache.u.setZero();
     } else {
-        this->cache.u = this->getTorqueID(xVd, yVd);
+        this->cache.u = this->getTorqueID();
     }
 
     int ind = 0;
@@ -403,7 +420,7 @@ void Walking1DControl::update(VectorXd &radio, VectorXd &u) {
     this->memory.nVelocitySamplesThisStep += 1;
 }
 
-VectorXd Walking1DControl::getTorqueID(double xVd, double yVd) {
+VectorXd Walking1DControl::getTorqueID() {
     // https://journals.sagepub.com/doi/pdf/10.1177/0278364910388677
     // Learning, planning, and control for quadruped locomotion over challenging terrain
     // Controller based on ^^
@@ -734,18 +751,43 @@ void Walking1DControl::computeActual(VectorXd &ya, VectorXd &dya, MatrixXd &Dya,
 }
 
 void Walking1DControl::computeDesired(VectorXd &yd, VectorXd &dyd, VectorXd &d2yd) {
+    double s = this->phase.tau;
     // Update with smoothing from last domain
-    bezier_tools::bezier(this->memory.paramCurrent, this->phase.tau, yd);
-    bezier_tools::dbezier(this->memory.paramCurrent, this->phase.tau, dyd);
-    bezier_tools::dbezier(this->memory.paramCurrent, this->phase.tau, d2yd);
+    Vector2d phaseRange = this->phase.getPhaseRange();
+    VectorXd col1(9), col2(9);
+    col1 << this->memory.yd_last;
+    col2 << this->memory.yd_last + this->memory.dyd_last * ( (phaseRange(1) - phaseRange(0)) / (this->memory.paramCurrent.cols() - 1)  );
+
+    // Stance yaw
+    this->memory.paramCurrent(2,0) = col1(2);
+    this->memory.paramCurrent(2,1) = col2(2);
+
+    // Swing angle
+    this->memory.paramCurrent(5,0) = col1(5);
+    this->memory.paramCurrent(5,1) = col2(5);
+
+    // Swing roll
+    this->memory.paramCurrent(6,0) = col1(6);
+    this->memory.paramCurrent(6,1) = col2(6);
+
+    // Swing yaw
+    this->memory.paramCurrent(7,0) = col1(7);
+    this->memory.paramCurrent(7,1) = col2(7);
+
+
+    // Compute
+    bezier_tools::bezier(this->memory.paramCurrent, s, yd);
+    bezier_tools::dbezier(this->memory.paramCurrent, s, dyd);
+    bezier_tools::dbezier(this->memory.paramCurrent, s, d2yd);
     dyd = dyd * this->phase.dtau;
     d2yd = d2yd * pow(this->phase.dtau,2);
 
     // Move toe up a little
     yd(8) -= 0.05;
 
-    // Use the impact leg extension for part of the following step
-    yd(3) += (1.0 - this->phase.tau) * this->memory.raibert_offset_last(0);
+    // Use the impact leg extension for the following step
+    yd(3) += (1.0 - s) * this->memory.raibert_offset_last(0);
+    yd(5) += this->memory.leg_angle_offset;
 }
 
 void Walking1DControl::computeGuard(double x_offset, bool requestTransition) {
@@ -778,34 +820,34 @@ void Walking1DControl::computeGuard(double x_offset, bool requestTransition) {
 
         // Update terminal outputs
         this->computeActual(this->cache.ya, this->cache.dya, this->cache.Dya, this->cache.DLfya);
-        double swingRoll, dSwingRoll;
-        if (this->memory.iDomain == 0) {
-            swingRoll = this->robot->q(LeftHipRoll);
-            dSwingRoll = this->robot->dq(LeftHipRoll);
-        } else {
-            swingRoll = this->robot->q(RightHipRoll);
-            dSwingRoll = this->robot->dq(RightHipRoll);
-        }
+
+        double s = 0.;
+        this->phase.tau = 0.;
+        // this->computeLibrary();
+        VectorXd yd_temp(9), dyd_temp(9);
+        bezier_tools::bezier(this->memory.paramCurrent, s, yd_temp);
+        bezier_tools::dbezier(this->memory.paramCurrent, s, dyd_temp);
+        dyd_temp = dyd_temp * this->phase.dtau;
 
         this->memory.yd_last <<
-                this->cache.yd(0),
-                this->cache.yd(1),
-                this->cache.yd(7),
-                this->cache.yd(4),
-                this->cache.yd(3),
-                this->cache.ya(5),
-                swingRoll,
-                this->cache.yd(2),
-                0.;
+                yd_temp(0),        // base roll
+                yd_temp(1),        // base pitch
+                this->cache.ya(2), // stance yaw
+                yd_temp(3),        // stance leg length
+                this->cache.ya(4), // swing leg length
+                this->cache.ya(5) - this->memory.leg_angle_offset, // Leg angle
+                this->cache.ya(6), // leg roll
+                this->cache.ya(7), // swing yaw
+                0.; // swing foot
         this->memory.dyd_last <<
-                this->cache.dyd(0),
-                this->cache.dyd(1),
-                this->cache.dyd(7),
-                this->cache.dyd(4),
-                this->cache.dyd(3),
+                dyd_temp(0),
+                dyd_temp(1),
+                this->cache.dya(2),
+                dyd_temp(3),
+                fmin(this->cache.dya(4), 0.),
                 this->cache.dya(5),
-                dSwingRoll,
-                this->cache.dyd(2),
+                this->cache.dya(6),
+                this->cache.dya(7),
                 0.;
 
         // If the new domain is right stance and stop was requested, then queue in the right to stance parameters

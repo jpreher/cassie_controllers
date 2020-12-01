@@ -15,6 +15,7 @@
 #include <qpOASES.hpp>
 #include <control_utilities/filters.hpp>
 #include <control_utilities/limits.hpp>
+#include <cassie_estimation/rigidtarsus_solver.hpp>
 
 USING_NAMESPACE_QPOASES
 
@@ -85,6 +86,7 @@ private:
         int nVelocitySamplesThisStep;
         double lastTau;
         double s_feet; // (left) -1 <--> 1 (right)
+        double leg_angle_offset;
 
         bool qp_initialized;
 
@@ -109,8 +111,6 @@ private:
         VectorXd Kd;
         VectorXd Kpy;
         VectorXd Kdy;
-        double grf_KpX;
-        double grf_KpY;
         double raibert_KpX;
         double raibert_KpY;
         double raibert_KdX;
@@ -126,6 +126,7 @@ private:
         double left_stance_gravity_scale;
         double right_stance_gravity_scale;
         MatrixXd Be;
+        double velocity_integrator_bleed_constant;
 
         double vdx_ub;
         double vdx_lb;
@@ -204,12 +205,15 @@ private:
     // Gait phasing variable
     PhaseVariable phase;
 
+    // Swing leg tarsus ik solver
+    RigidTarsusSolver tarsusSolver;
+
     // Private methods
     void nextDomain();
     void computeGuard(double x_offset, bool requestTransition);
     void computeActual(VectorXd &ya, VectorXd &dya, MatrixXd &Dya, MatrixXd &DLfya);
     void computeDesired(VectorXd &yd, VectorXd &dyd, VectorXd &d2yd);
-    VectorXd getTorqueID(double xVd, double yVd);
+    VectorXd getTorqueID();
     void updateTurning(double yawUpdate);
     void updateRaibert(double xVd, double yVd);
     void updateAccelerations(double xVd, double yVd);

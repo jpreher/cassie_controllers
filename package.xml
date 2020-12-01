@@ -52,6 +52,7 @@
   <build_depend>realtime_utilities</build_depend>
   <build_depend>roslib_utilities</build_depend>
   <build_depend>qpoases_ros</build_depend>
+  <build_depend>cassie_estimation</build_depend>
 
   <run_depend>roscpp</run_depend>
   <run_depend>rospy</run_depend>
@@ -64,6 +65,7 @@
   <run_depend>realtime_utilities</run_depend>
   <run_depend>roslib_utilities</run_depend>
   <run_depend>qpoases_ros</run_depend>
+  <run_depend>cassie_estimation</run_depend>
 
   <!-- The export tag contains other, unspecified, tags -->
   <export>

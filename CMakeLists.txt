@@ -16,6 +16,7 @@ find_package(catkin REQUIRED COMPONENTS
   eigen_utilities
   ros_utilities
   cassie_common_toolbox
+  cassie_estimation
   realtime_utilities
   roslib_utilities
   qpoases_ros
