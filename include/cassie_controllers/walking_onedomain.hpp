@@ -27,7 +27,7 @@ public:
     void reset();
     bool reconfigure();
     bool isReadyToTransition() {return this->memory.readyToStop;}
-    void getDebug(VectorXd &dbg);
+    void getDebug(VectorXf &dbg);
 
 private:
 

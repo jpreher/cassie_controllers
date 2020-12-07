@@ -519,18 +519,6 @@ VectorXd Walking1DControl::getTorqueID() {
     }
 
     // Cap saggital moment on foot from torque
-    double pax, pay;
-    VectorXd pose_sf(5);
-    if (this->memory.iDomain == 0) {
-        VectorWrap pose_sf_(pose_sf);
-        SymFunction::p_rightSole_constraint(pose_sf_, this->robot->q);
-    } else {
-        VectorWrap pose_sf_(pose_sf);
-        SymFunction::p_leftSole_constraint(pose_sf_, this->robot->q);
-    }
-    pax = - (pose_sf(0) + this->memory.raibert_offset_last(0));
-    pay = - (pose_sf(1) + this->memory.raibert_offset_last(1));
-
     double moment_scale = 1.0/50.0;
     double foot_length = 0.14;
     double pitch_constr = moment_scale * forces(4) * foot_length / 2;
@@ -911,22 +899,23 @@ void Walking1DControl::computeLibrary() {
     bezier_tools::bezier(tempF, this->phase.tau, this->cache.Fd);
 }
 
-void Walking1DControl::getDebug(VectorXd &dbg) {
-    dbg << ros::Time::now().toSec(), // 1
-            this->phase.tau, // 1
-            this->phase.dtau, // 1
-            this->cache.ya, // 9
-            this->cache.dya, // 9
-            this->cache.yd, // 9
-            this->cache.dyd, // 9
-            this->cache.V, // 1
-            this->cache.u, // 10
-            this->cache.Fdes, // 11
-            0, // 1
-            this->cache.vd(0), this->cache.vd(1), // 2
-            this->robot->dq(0), this->robot->dq(1), // 2
-            this->lpVaXlastStep.getValue(), this->lpVaYlastStep.getValue(), //2
-            this->cache.raibert_offset, // 3
-            this->cache.uff; // 10
+void Walking1DControl::getDebug(VectorXf &dbg) {
+    // Use floats for logging size and speed
+        dbg << static_cast<float>(ros::Time::now().toSec()), // 1
+               static_cast<float>(this->phase.tau), // 1
+               static_cast<float>(this->phase.dtau), // 1
+               this->cache.ya.cast <float> (), // 9
+               this->cache.dya.cast <float> (), // 9
+               this->cache.yd.cast <float> (), // 9
+               this->cache.dyd.cast <float> (), // 9
+               static_cast<float>(this->cache.V), // 1
+               this->cache.u.cast <float> (), // 10
+               this->cache.Fdes.cast <float> (), // 11
+               0, // 1
+               static_cast<float>(this->cache.vd[0]), static_cast<float>(this->cache.vd[1]), // 2
+               static_cast<float>(this->robot->dq[0]), static_cast<float>(this->robot->dq[1]), // 2
+               static_cast<float>(this->lpVaXlastStep.getValue()), static_cast<float>(this->lpVaYlastStep.getValue()), //2
+               this->cache.raibert_offset.cast <float> (), // 3
+               this->cache.uff.cast <float> (); // 10
     // ndbg = 76
 }

@@ -84,9 +84,8 @@ int main(int argc, char *argv[])
     Walking1DControl step_1dom_control(nh, robot);
 
     // Logging things
-    VectorXd qplog(81); qplog.setZero();
-    VectorXd pdlog(59); pdlog.setZero();
-    VectorXd standlog(59); standlog.setZero();
+    VectorXf qplog(81); qplog.setZero();
+    VectorXf standlog(59); standlog.setZero();
     std::fstream logfileStand, logfileWalk;
     bool log_controller = false;
     ros::param::get("/cassie/log_controller", log_controller);
@@ -136,7 +135,7 @@ int main(int argc, char *argv[])
                 }
                 if ( log_controller ) {
                     stand_control.getDebug(standlog);
-                    logfileStand.write(reinterpret_cast<char *>(standlog.data()), (standlog.size())*sizeof(double));
+                    logfileStand.write(reinterpret_cast<char *>(standlog.data()), (standlog.size())*sizeof(float));
                 }
 
                 if (mode_command < 0) {
@@ -159,7 +158,7 @@ int main(int argc, char *argv[])
 
                 if ( log_controller ) {
                     step_1dom_control.getDebug(qplog);
-                    logfileWalk.write(reinterpret_cast<char *>(qplog.data()), (qplog.size())*sizeof(double));
+                    logfileWalk.write(reinterpret_cast<char *>(qplog.data()), (qplog.size())*sizeof(float));
                 }
 
                 if ( (mode_command == 0) && ( step_1dom_control.isReadyToTransition() ) ) {

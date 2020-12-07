@@ -952,17 +952,17 @@ void StandingControlQP::processRadio(VectorXd &radio) {
     */
 }
 
-void StandingControlQP::getDebug(VectorXd &dbg) {
-    dbg << ros::Time::now().toSec(), // 1
-            this->cache.ya,    // 6
-            this->cache.dya,   // 6
-            this->cache.yd,    // 6
-            this->cache.dyd,   // 6
-            this->cache.d2yd,  // 6
-            this->cache.V,     // 1
-            this->cache.u,     // 10
-            this->cache.Fdes,  // 16
-            this->cache.delta; // 1
+void StandingControlQP::getDebug(VectorXf &dbg) {
+    dbg << static_cast<float>(ros::Time::now().toSec()), // 1
+            this->cache.ya.cast <float> (),    // 6
+            this->cache.dya.cast <float> (),   // 6
+            this->cache.yd.cast <float> (),    // 6
+            this->cache.dyd.cast <float> (),   // 6
+            this->cache.d2yd.cast <float> (),  // 6
+            static_cast<float>(this->cache.V), // 1
+            this->cache.u.cast <float> (),     // 10
+            this->cache.Fdes.cast <float> (),  // 16
+            static_cast<float>(this->cache.delta); // 1
     // ndbg = 59
 }
 

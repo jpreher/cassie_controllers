@@ -29,7 +29,7 @@ public:
     void reset();
     bool reconfigure();
     bool isReadyToTransition() {return this->memory.readyToTransition;}
-    void getDebug(VectorXd &dbg);
+    void getDebug(VectorXf &dbg);
 
 private:
     /**
