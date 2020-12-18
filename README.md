@@ -11,10 +11,10 @@ SB | -1=NULL / 0=Stand / 1=Walk
 S1 | Swing leg pitch offset angle during walking
 LH | Horizontal strafing
 LV | Sagittal walking speed
-RV | Turn rate for heading
+RH | Turn rate for heading
 LS | Standing height (keep at max for transition to/from walking)
 SH | Trigger for predefined dynamic crouch if LS at max and in standing mode
 
-
-
 When using our crouching and walking controllers on your hardware, please be aware that we have spent no time developing smooth transition behaviors for stand to walk and walk to stand. The robot will switch cleanly between these modes, but you will need to either code your own or provide some light manual support when going back and forth.
+
+Please ensure that your controllers and gains are configured properly in Gazebo before trying anything on hardware. If you are unsure of how to modify part of the existing code, or if the gains and controllers which are provided here are having problems, feel free to reach out: jreher@caltech.edu.
