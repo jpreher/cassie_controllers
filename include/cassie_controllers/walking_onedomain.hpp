@@ -16,6 +16,7 @@
 #include <control_utilities/filters.hpp>
 #include <control_utilities/limits.hpp>
 #include <cassie_estimation/rigidtarsus_solver.hpp>
+#include <Eigen/Sparse>
 
 USING_NAMESPACE_QPOASES
 
@@ -50,12 +51,46 @@ private:
         VectorXd raibert_offset;
         VectorXd uff;
         VectorXd ddqtar;
+
         VectorXd qmd;
         VectorXd dqmd;
+
+
+        // QP cache allocation
+        MatrixXd Jc;
+        MatrixXd dJc;
+        MatrixXd Js;
+        MatrixXd dJs;
+        MatrixXd Jcs;
+        MatrixXd dJcs;
+        MatrixXd A_holonomics;
+        VectorXd b_holonomics;
+        MatrixXd Aeq_dynamics;
+        VectorXd beq_dynamics;
+        MatrixXd A_friction;
+        VectorXd b_lb_friction, b_ub_friction;
+        MatrixXd A_y;
+        VectorXd b_y;
+        MatrixXd A_clf;
+        MatrixXd A_reg;
+        VectorXd b_reg;
+        MatrixXd Proj;
+        VectorXd qpsol;
         double V;
         VectorXd Fdes;
+        double delta;
+
+        Eigen::Matrix<double,Dynamic,Dynamic,RowMajor> Aconstr;
+        VectorXd lbA;
+        VectorXd ubA;
+
+        Eigen::Matrix<double,Dynamic,Dynamic,RowMajor> G;
+        VectorXd g;
+        Eigen::SparseMatrix<double> Gsparse;
+
         Eigen::EulerAnglesZYXd euler;
         Eigen::Transform<double, 3, Affine> T_des_pelvis;
+
         VectorXd u;
 
         void init();
@@ -76,9 +111,13 @@ private:
         VectorXd yd_last;
         VectorXd dyd_last;
         VectorXd raibert_offset_last;
+        double   leg_angle_offset;
+        double   leg_roll_offset;
         VectorXd u_prev;
         VectorXd vd_integral_error;
+
         MatrixXd paramCurrent;
+
         Vector2d raibert_deltaX;
         Vector2d raibert_deltaY;
         Vector2d lastStepVelocity;
@@ -86,7 +125,6 @@ private:
         int nVelocitySamplesThisStep;
         double lastTau;
         double s_feet; // (left) -1 <--> 1 (right)
-        double leg_angle_offset;
 
         bool qp_initialized;
 
@@ -98,40 +136,104 @@ private:
     * @brief Persistent controller configurations
     */
     struct Config {
+        bool isSim;
         bool use_qp;
         int nDomain;
         double time_scale;
-        double x_offset;
         double vx_offset;
         double vy_offset;
+        double leg_angle_offset_center;
         double u_stancetoe_offset;
+        double swing_foot_offset;
         double stoppable_velocity_threshold;
         bool use_contact_switching;
         VectorXd Kp;
         VectorXd Kd;
         VectorXd Kpy;
         VectorXd Kdy;
+        bool swing_angle_absolute;
         double raibert_KpX;
         double raibert_KpY;
         double raibert_KdX;
         double raibert_KdY;
+        double raibert_KiX;
+        double raibert_KiY;
         double ddq_KpX;
         double ddq_KdX;
         double ddq_KiX;
         double ddq_KpY;
         double ddq_KdY;
         double ddq_KiY;
-        double raibert_phaseThreshold;
         VectorXd torque_bounds;
         double left_stance_gravity_scale;
         double right_stance_gravity_scale;
-        MatrixXd Be;
+        VectorXd Pdiag;
+        VectorXd Poffdiag;
+        double res_clf_ep;
+        double clf_gam;
         double velocity_integrator_bleed_constant;
 
         double vdx_ub;
         double vdx_lb;
         double vdy_ub;
         double vdy_lb;
+
+        double Kp_grf_leglength;
+        double Kd_grf_leglength;
+        double k1_grf;
+        double k2_grf;
+        double k3_grf;
+        double k4_grf;
+        double k_grf_offset;
+
+        double force_z_scale;
+        double force_sp_scale;
+
+        bool clf_use_task_pd;
+        bool clf_use_inequality;
+        bool clf_use_Vdot_cost;
+
+        // QP Terms
+        int nQPIter;
+        int ny;
+        double ep;
+        double gam;
+        MatrixXd P;
+        MatrixXd F;
+        MatrixXd G;
+        MatrixXd LFV_mat;
+        MatrixXd Be;
+        MatrixXd contact_pyramid;
+        VectorXd lb;
+        VectorXd ub;
+
+        // Large matrix static configurations
+        MatrixXd Su;
+        MatrixXd Sc;
+
+        // QP Tuning
+        double reg_ddq;
+        VectorXd reg_base_ddq;
+        VectorXd reg_stance_ddq;
+        VectorXd reg_swing_ddq;
+        VectorXd reg_stance_u;
+        VectorXd reg_swing_u;
+        double reg_rigid;
+        double reg_fx;
+        double reg_fy;
+        double reg_fz;
+        double reg_muy;
+        double reg_muz;
+        double reg_clf_delta;
+
+        double w_outputs;
+        double w_hol_fixed;
+        double w_hol_fx;
+        double w_hol_fy;
+        double w_hol_fz;
+        double w_hol_my;
+        double w_hol_mz;
+        double w_Vdot;
 
         struct GaitLibrary {
             struct StanceParameters{
@@ -140,6 +242,7 @@ private:
                 std::vector< std::vector<VectorXd> > avelocity_array;
                 std::vector< std::vector<VectorXd> > addq_array;
                 std::vector< std::vector<VectorXd> > af_array;
+                std::vector< std::vector<VectorXd> > au_array;
 
                 void resize_vectors(unsigned long sz) {
                     amat_array.resize(sz);
@@ -147,6 +250,7 @@ private:
                     avelocity_array.resize(sz);
                     addq_array.resize(sz);
                     af_array.resize(sz);
+                    au_array.resize(sz);
                 }
             };
             StanceParameters left;
@@ -171,7 +275,7 @@ private:
     ros::NodeHandle *nh;
     ros::ServiceServer reconfigureService;
 
-    control_utilities::LowPassFilter lpVdX    = control_utilities::LowPassFilter(0.001, 1.75);
+    control_utilities::LowPassFilter lpVdX    = control_utilities::LowPassFilter(0.001, 0.75);
     control_utilities::LowPassFilter lpVdY    = control_utilities::LowPassFilter(0.001, 0.25);
     control_utilities::LowPassFilter lpVdTurn = control_utilities::LowPassFilter(0.001, 0.25);
 
@@ -202,6 +306,9 @@ private:
     // Pointer to robot model
     cassie_model::Cassie *robot;
 
+    // Feedforward controller
+    feedforward_underactuated ff;
+
     // Gait phasing variable
     PhaseVariable phase;
 
@@ -210,14 +317,18 @@ private:
 
     // Private methods
     void nextDomain();
-    void computeGuard(double x_offset, bool requestTransition);
+    void computeGuard(bool requestTransition);
     void computeActual(VectorXd &ya, VectorXd &dya, MatrixXd &Dya, MatrixXd &DLfya);
     void computeDesired(VectorXd &yd, VectorXd &dyd, VectorXd &d2yd);
+    VectorXd getTorqueQP();
     VectorXd getTorqueID();
     void updateTurning(double yawUpdate);
     void updateRaibert(double xVd, double yVd);
     void updateAccelerations(double xVd, double yVd);
+    void updateForces(double xVd, double yVd);
     void computeLibrary();
+
+    int SwingLegInverseKinematics(VectorXd &qmd, VectorXd &dqmd, VectorXd &ddqmd);
 };
 
 

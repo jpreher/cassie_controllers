@@ -81,11 +81,12 @@ int main(int argc, char *argv[])
 
     // Create the associated controllers
     StandingControlQP stand_control(nh, robot);
-    Walking1DControl step_1dom_control(nh, robot);
+    Walking1DControl walk_control(nh, robot);
 
     // Logging things
-    VectorXf qplog(81); qplog.setZero();
-    VectorXf standlog(59); standlog.setZero();
+    VectorXf qplog(82); qplog.setZero();//+44
+    VectorXf pdlog(60); pdlog.setZero();
+    VectorXf standlog(60); standlog.setZero();
     std::fstream logfileStand, logfileWalk;
     bool log_controller = false;
     ros::param::get("/cassie/log_controller", log_controller);
@@ -144,26 +145,28 @@ int main(int argc, char *argv[])
                 }
                 if ( (mode_command > 0) && (stand_control.isReadyToTransition()) ) {
                     ROS_INFO("Transitioning to stepping control!");
-                    step_1dom_control.reset();
+                    walk_control.reset();
                     mode = 1;
                     stand_control.reset();
                 }
                 break;
             }
             case 1: {
-                step_1dom_control.update(radio, u);
+                walk_control.update(radio, u);
+
                 for (unsigned int i = 0; i<10; ++i) {
                     control_message.motor_torque[i] = u(i);
                 }
 
                 if ( log_controller ) {
-                    step_1dom_control.getDebug(qplog);
+                    walk_control.getDebug(qplog);
+
                     logfileWalk.write(reinterpret_cast<char *>(qplog.data()), (qplog.size())*sizeof(float));
                 }
 
-                if ( (mode_command == 0) && ( step_1dom_control.isReadyToTransition() ) ) {
+                if ( (mode_command == 0) && ( walk_control.isReadyToTransition() ) ) {
                     ROS_INFO("Transitioning to standing control!");
-                    step_1dom_control.reset();
+                    walk_control.reset();
                     stand_control.reset();
                     mode = 0;
                 }
